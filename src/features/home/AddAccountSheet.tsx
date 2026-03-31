@@ -19,6 +19,8 @@ type AddAccountSheetProps = {
   onSubmit: (input: AddAccountInput) => Promise<void>;
 };
 
+type NameMode = 'manual' | 'preset';
+
 type PreviewState = {
   logoFile: File | null;
   preview: string;
@@ -49,6 +51,7 @@ export function AddAccountSheet({
   onSubmit
 }: AddAccountSheetProps) {
   const [name, setName] = useState('');
+  const [nameMode, setNameMode] = useState<NameMode>('manual');
   const [balance, setBalance] = useState('0');
   const [balanceNote, setBalanceNote] = useState('');
   const [logoState, setLogoState] = useState<PreviewState>(defaultPreviewState);
@@ -60,6 +63,8 @@ export function AddAccountSheet({
 
   async function handlePresetSelect(preset: PresetLogoOption) {
     const logoFile = await presetLogoToFile(preset);
+    setName(preset.label);
+    setNameMode('preset');
 
     setLogoState({
       logoFile,
@@ -75,6 +80,8 @@ export function AddAccountSheet({
     }
 
     const preview = await readPreview(file);
+    setName((currentName) => (nameMode === 'preset' ? '' : currentName));
+    setNameMode('manual');
     setLogoState({
       logoFile: file,
       preview,
@@ -113,6 +120,7 @@ export function AddAccountSheet({
       });
 
       setName('');
+      setNameMode('manual');
       setBalance('0');
       setBalanceNote('');
       setLogoState(defaultPreviewState());
@@ -154,9 +162,18 @@ export function AddAccountSheet({
             Account name
             <input
               value={name}
-              onChange={(event) => setName(event.target.value)}
+              onChange={(event) => {
+                setName(event.target.value);
+                setNameMode('manual');
+              }}
+              readOnly={Boolean(logoState.selectedPresetId)}
               placeholder="Savings jar"
             />
+            <small className={styles.helperText}>
+              {logoState.selectedPresetId
+                ? 'Preset logos name this account automatically.'
+                : 'If you upload your own image, choose the account name here.'}
+            </small>
           </label>
 
           <label>

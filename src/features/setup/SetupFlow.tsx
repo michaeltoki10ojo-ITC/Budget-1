@@ -13,9 +13,12 @@ import styles from './SetupFlow.module.css';
 
 const INITIAL_ACCOUNT_NAME = 'Checking';
 
+type AccountNameSource = 'default' | 'manual' | 'preset';
+
 type AccountSetupForm = {
   id: string;
   name: string;
+  nameSource: AccountNameSource;
   balance: string;
   balanceNote: string;
   logoFile: File | null;
@@ -27,6 +30,7 @@ function createSetupAccount(name: string): AccountSetupForm {
   return {
     id: createId(),
     name,
+    nameSource: 'default',
     balance: '0',
     balanceNote: '',
     logoFile: null,
@@ -85,7 +89,14 @@ export function SetupFlow() {
     setAccounts((currentAccounts) =>
       currentAccounts.map((account, currentIndex) =>
         currentIndex === index
-          ? { ...account, logoFile: file, preview, selectedPresetId: null }
+          ? {
+              ...account,
+              name: account.nameSource === 'manual' ? account.name : '',
+              nameSource: 'manual',
+              logoFile: file,
+              preview,
+              selectedPresetId: null
+            }
           : account
       )
     );
@@ -141,6 +152,8 @@ export function SetupFlow() {
         currentIndex === index
           ? {
               ...account,
+              name: preset.label,
+              nameSource: 'preset',
               logoFile,
               preview: preset.src,
               selectedPresetId: preset.id
@@ -320,14 +333,21 @@ export function SetupFlow() {
                             currentIndex === index
                               ? {
                                   ...currentAccount,
-                                  name: event.target.value
+                                  name: event.target.value,
+                                  nameSource: 'manual'
                                 }
                               : currentAccount
                           )
                         )
                       }
+                      readOnly={Boolean(account.selectedPresetId)}
                       placeholder={index === 0 ? 'Checking' : `Account ${index + 1}`}
                     />
+                    <small className={styles.helperText}>
+                      {account.selectedPresetId
+                        ? 'Preset logos name this account automatically.'
+                        : 'If you upload your own image, choose the account name here.'}
+                    </small>
                   </label>
 
                   <label>
