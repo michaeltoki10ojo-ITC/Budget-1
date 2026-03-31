@@ -31,3 +31,13 @@ export const ACCOUNT_LOGO_OPTIONS: PresetLogoOption[] = [
     src: venmoLogo
   }
 ];
+
+export async function presetLogoToFile(preset: PresetLogoOption): Promise<File> {
+  const response = await fetch(preset.src);
+  const blob = await response.blob();
+  const extension = preset.src.split('.').pop()?.split('?')[0] ?? 'png';
+
+  return new File([blob], `${preset.id}.${extension}`, {
+    type: blob.type || 'image/png'
+  });
+}

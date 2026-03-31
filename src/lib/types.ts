@@ -45,6 +45,12 @@ export type SetupAccountInput = {
   logoFile: File;
 };
 
+export type AddAccountInput = {
+  name: string;
+  balanceCents: number;
+  logoFile: File;
+};
+
 export type AddExpenseInput = {
   accountId: string;
   name: string;

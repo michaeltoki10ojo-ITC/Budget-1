@@ -1,5 +1,6 @@
 import type {
   Account,
+  AddAccountInput,
   AddExpenseInput,
   AddWantInput,
   AppSettings,
@@ -107,6 +108,24 @@ export const accountsRepo = {
 
     await transaction.done;
     return sortAccounts(accounts);
+  },
+
+  async create(input: Omit<AddAccountInput, 'logoFile'> & { logoAssetId: string }): Promise<Account> {
+    ensureFiveIncrement(input.balanceCents);
+
+    const db = await getBudgetDb();
+    const existingAccounts = await db.getAll('accounts');
+    const account: Account = {
+      id: createId(),
+      createdAt: new Date().toISOString(),
+      name: input.name,
+      logoAssetId: input.logoAssetId,
+      balanceCents: input.balanceCents,
+      sortOrder: existingAccounts.length
+    };
+
+    await db.put('accounts', account);
+    return account;
   },
 
   async updateBalance(accountId: string, deltaCents: number): Promise<Account> {

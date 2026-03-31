@@ -1,0 +1,211 @@
+import { useState, type FormEvent } from 'react';
+import type { AddAccountInput } from '../../lib/types';
+import {
+  ensureFiveIncrement,
+  isFiveIncrement,
+  parseCurrencyInputToCents
+} from '../../lib/utils/money';
+import {
+  ACCOUNT_LOGO_OPTIONS,
+  presetLogoToFile,
+  type PresetLogoOption
+} from '../setup/logoOptions';
+import styles from './AddAccountSheet.module.css';
+
+type AddAccountSheetProps = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  onClose: () => void;
+  onSubmit: (input: AddAccountInput) => Promise<void>;
+};
+
+type PreviewState = {
+  logoFile: File | null;
+  preview: string;
+  selectedPresetId: string | null;
+};
+
+function defaultPreviewState(): PreviewState {
+  return {
+    logoFile: null,
+    preview: '',
+    selectedPresetId: null
+  };
+}
+
+function readPreview(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to preview image.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export function AddAccountSheet({
+  isOpen,
+  isSubmitting,
+  onClose,
+  onSubmit
+}: AddAccountSheetProps) {
+  const [name, setName] = useState('');
+  const [balance, setBalance] = useState('0');
+  const [logoState, setLogoState] = useState<PreviewState>(defaultPreviewState);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  if (!isOpen) {
+    return null;
+  }
+
+  async function handlePresetSelect(preset: PresetLogoOption) {
+    const logoFile = await presetLogoToFile(preset);
+
+    setLogoState({
+      logoFile,
+      preview: preset.src,
+      selectedPresetId: preset.id
+    });
+  }
+
+  async function handleLogoChange(file: File | null) {
+    if (!file) {
+      setLogoState(defaultPreviewState());
+      return;
+    }
+
+    const preview = await readPreview(file);
+    setLogoState({
+      logoFile: file,
+      preview,
+      selectedPresetId: null
+    });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setErrorMessage('');
+
+    try {
+      const balanceCents = parseCurrencyInputToCents(balance);
+
+      if (!name.trim()) {
+        throw new Error('Add an account name.');
+      }
+
+      if (balanceCents === null) {
+        throw new Error('Add a starting balance.');
+      }
+
+      ensureFiveIncrement(balanceCents);
+
+      if (!logoState.logoFile) {
+        throw new Error('Pick a logo or upload your own.');
+      }
+
+      await onSubmit({
+        name: name.trim(),
+        balanceCents,
+        logoFile: logoState.logoFile
+      });
+
+      setName('');
+      setBalance('0');
+      setLogoState(defaultPreviewState());
+      onClose();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to create account.');
+    }
+  }
+
+  return (
+    <div className={styles.overlay}>
+      <form className={styles.sheet} onSubmit={handleSubmit}>
+        <div className={styles.header}>
+          <div>
+            <p className={styles.eyebrow}>New account</p>
+            <h2>Add another account to your budget.</h2>
+          </div>
+          <button type="button" className={styles.closeButton} onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className={styles.formGrid}>
+          <label>
+            Account name
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Savings jar"
+            />
+          </label>
+
+          <label>
+            Starting balance
+            <input
+              type="number"
+              inputMode="decimal"
+              step={5}
+              value={balance}
+              onChange={(event) => setBalance(event.target.value)}
+              placeholder="0"
+            />
+            <small className={styles.helperText}>
+              {isFiveIncrement(parseCurrencyInputToCents(balance) ?? 0)
+                ? 'Balance is valid in $5 steps.'
+                : 'Balance must stay in $5 increments.'}
+            </small>
+          </label>
+        </div>
+
+        <div className={styles.logoSection}>
+          <div className={styles.logoHeader}>
+            <span>Choose a logo</span>
+            <small>Use one of your preset account logos or upload a custom image.</small>
+          </div>
+
+          <div className={styles.logoPreview}>
+            {logoState.preview ? (
+              <img src={logoState.preview} alt={`${name || 'Account'} preview`} />
+            ) : (
+              <span>{(name || 'A').slice(0, 1).toUpperCase()}</span>
+            )}
+          </div>
+
+          <div className={styles.logoOptionGrid}>
+            {ACCOUNT_LOGO_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className={
+                  logoState.selectedPresetId === option.id
+                    ? `${styles.logoOptionButton} ${styles.logoOptionButtonSelected}`
+                    : styles.logoOptionButton
+                }
+                onClick={() => void handlePresetSelect(option)}
+              >
+                <img src={option.src} alt={option.label} />
+                <span>{option.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <label>
+            Or upload your own
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(event) => void handleLogoChange(event.target.files?.[0] ?? null)}
+            />
+          </label>
+        </div>
+
+        {errorMessage ? <p className={styles.error}>{errorMessage}</p> : null}
+
+        <button type="submit" className={styles.submitButton} disabled={isSubmitting}>
+          {isSubmitting ? 'Saving account...' : 'Add account'}
+        </button>
+      </form>
+    </div>
+  );
+}

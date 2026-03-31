@@ -53,4 +53,20 @@ describe('AccountDetailPage', () => {
 
     expect(quickAdjustBalance).toHaveBeenCalledWith('checking', 1000);
   });
+
+  it('fills the expense name from suggested expenses', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/account/checking']}>
+        <Routes>
+          <Route path="/account/:accountId" element={<AccountDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Groceries' }));
+
+    expect(screen.getByLabelText(/expense name/i)).toHaveValue('Groceries');
+  });
 });

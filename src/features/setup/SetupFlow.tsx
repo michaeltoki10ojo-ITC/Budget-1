@@ -3,7 +3,7 @@ import { useBudgetApp } from '../../app/state/BudgetAppContext';
 import { ensureFiveIncrement, isFiveIncrement, parseCurrencyInputToCents } from '../../lib/utils/money';
 import { isValidPin } from '../../lib/utils/pin';
 import type { SetupAccountInput } from '../../lib/types';
-import { ACCOUNT_LOGO_OPTIONS, type PresetLogoOption } from './logoOptions';
+import { ACCOUNT_LOGO_OPTIONS, presetLogoToFile } from './logoOptions';
 import styles from './SetupFlow.module.css';
 
 const STARTER_ACCOUNTS = ['Checking', 'Cash', 'Savings'];
@@ -22,16 +22,6 @@ function readPreview(file: File): Promise<string> {
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(reader.error ?? new Error('Unable to preview image.'));
     reader.readAsDataURL(file);
-  });
-}
-
-async function presetToFile(preset: PresetLogoOption): Promise<File> {
-  const response = await fetch(preset.src);
-  const blob = await response.blob();
-  const extension = preset.src.split('.').pop()?.split('?')[0] ?? 'png';
-
-  return new File([blob], `${preset.id}.${extension}`, {
-    type: blob.type || 'image/png'
   });
 }
 
@@ -90,8 +80,8 @@ export function SetupFlow() {
     );
   }
 
-  async function handlePresetSelect(index: number, preset: PresetLogoOption) {
-    const logoFile = await presetToFile(preset);
+  async function handlePresetSelect(index: number, preset: (typeof ACCOUNT_LOGO_OPTIONS)[number]) {
+    const logoFile = await presetLogoToFile(preset);
 
     setAccounts((currentAccounts) =>
       currentAccounts.map((account, currentIndex) =>

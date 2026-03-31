@@ -15,6 +15,17 @@ const QUICK_ACTIONS = [
   { label: '-20', deltaCents: -2000 }
 ];
 
+const SUGGESTED_EXPENSES = [
+  'Groceries',
+  'Gas',
+  'Dining out',
+  'Coffee',
+  'Shopping',
+  'Phone bill',
+  'Subscription',
+  'Transfer'
+];
+
 export function AccountDetailPage() {
   const navigate = useNavigate();
   const { accountId } = useParams();
@@ -163,6 +174,35 @@ export function AccountDetailPage() {
               placeholder="5"
             />
           </label>
+        </div>
+
+        <div className={styles.suggestionBlock}>
+          <div className={styles.suggestionHeader}>
+            <p className={styles.sectionLabel}>Suggested expenses</p>
+            <span>Tap one to fill the name quickly</span>
+          </div>
+          <div className={styles.suggestionGrid}>
+            {SUGGESTED_EXPENSES.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                className={
+                  name === suggestion
+                    ? `${styles.suggestionChip} ${styles.suggestionChipActive}`
+                    : styles.suggestionChip
+                }
+                onClick={() => {
+                  setName(suggestion);
+
+                  if (!amount.trim()) {
+                    setAmount('5');
+                  }
+                }}
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
         </div>
 
         {errorMessage ? <p className={styles.error}>{errorMessage}</p> : null}

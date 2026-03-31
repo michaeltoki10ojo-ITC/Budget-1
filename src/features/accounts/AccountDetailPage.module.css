@@ -146,6 +146,45 @@
   margin-top: 1rem;
 }
 
+.suggestionBlock {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.suggestionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.suggestionHeader span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.suggestionGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.suggestionChip {
+  min-height: 2.65rem;
+  padding: 0.7rem 0.95rem;
+  border-radius: 999px;
+  background: rgba(13, 22, 39, 0.9);
+  color: var(--text-primary);
+  border: 1px solid var(--border-soft);
+  font-weight: 700;
+}
+
+.suggestionChipActive {
+  background: rgba(125, 211, 252, 0.16);
+  border-color: rgba(125, 211, 252, 0.36);
+}
+
 .error {
   margin: 1rem 0 0;
   padding: 0.85rem 1rem;

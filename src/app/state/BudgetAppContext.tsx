@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import type {
   Account,
+  AddAccountInput,
   AddExpenseInput,
   AddWantInput,
   AppSettings,
@@ -32,6 +33,7 @@ type BudgetAppContextValue = {
   wants: WantItem[];
   assets: Record<string, AssetRecord>;
   completeSetup: (pin: string, accountInputs: SetupAccountInput[]) => Promise<void>;
+  addAccount: (input: AddAccountInput) => Promise<void>;
   unlock: (pin: string) => Promise<boolean>;
   lock: () => void;
   quickAdjustBalance: (accountId: string, deltaCents: number) => Promise<void>;
@@ -68,6 +70,31 @@ export function BudgetAppProvider({ children }: { children: React.ReactNode }) {
   const [wants, setWants] = useState<WantItem[]>([]);
   const [assets, setAssets] = useState<Record<string, AssetRecord>>({});
 
+  async function saveAccountWithLogo(
+    input: Pick<AddAccountInput, 'name' | 'balanceCents' | 'logoFile'>,
+    sortOrder?: number
+  ) {
+    const resizedImage = await resizeImageToDataUrl(input.logoFile);
+    const savedAsset = await assetsRepo.save(resizedImage);
+    const account =
+      typeof sortOrder === 'number'
+        ? {
+            id: createId(),
+            name: input.name,
+            logoAssetId: savedAsset.id,
+            balanceCents: input.balanceCents,
+            sortOrder,
+            createdAt: new Date().toISOString()
+          }
+        : await accountsRepo.create({
+            name: input.name,
+            balanceCents: input.balanceCents,
+            logoAssetId: savedAsset.id
+          });
+
+    return { account, asset: savedAsset };
+  }
+
   useEffect(() => {
     async function bootstrap() {
       const nextSettings = settingsRepo.get();
@@ -101,19 +128,10 @@ export function BudgetAppProvider({ children }: { children: React.ReactNode }) {
 
     for (let index = 0; index < accountInputs.length; index += 1) {
       const accountInput = accountInputs[index];
-      const resizedImage = await resizeImageToDataUrl(accountInput.logoFile);
-      const savedAsset = await assetsRepo.save(resizedImage);
-      const account: Account = {
-        id: createId(),
-        name: accountInput.name,
-        logoAssetId: savedAsset.id,
-        balanceCents: accountInput.balanceCents,
-        sortOrder: index,
-        createdAt: new Date().toISOString()
-      };
+      const { account, asset } = await saveAccountWithLogo(accountInput, index);
 
       seededAccounts.push(account);
-      nextAssets[savedAsset.id] = savedAsset;
+      nextAssets[asset.id] = asset;
     }
 
     await accountsRepo.seedStarterAccounts(seededAccounts);
@@ -131,6 +149,17 @@ export function BudgetAppProvider({ children }: { children: React.ReactNode }) {
     setWants([]);
     setAssets(nextAssets);
     setBootStatus('locked');
+  }
+
+  async function addAccount(input: AddAccountInput) {
+    ensureFiveIncrement(input.balanceCents);
+    const { account, asset } = await saveAccountWithLogo(input);
+
+    setAccounts((currentAccounts) => [...currentAccounts, account]);
+    setAssets((currentAssets) => ({
+      ...currentAssets,
+      [asset.id]: asset
+    }));
   }
 
   async function unlock(pin: string): Promise<boolean> {
@@ -271,6 +300,7 @@ export function BudgetAppProvider({ children }: { children: React.ReactNode }) {
         wants,
         assets,
         completeSetup,
+        addAccount,
         unlock,
         lock,
         quickAdjustBalance,
