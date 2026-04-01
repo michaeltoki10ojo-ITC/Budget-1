@@ -8,6 +8,7 @@ import {
 import { createId } from '../../lib/utils/id';
 import { isValidPin } from '../../lib/utils/pin';
 import type { SetupAccountInput } from '../../lib/types';
+import { assertSafeImageFile } from '../../lib/utils/image';
 import { ACCOUNT_LOGO_OPTIONS, presetLogoToFile } from './logoOptions';
 import styles from './SetupFlow.module.css';
 
@@ -73,33 +74,40 @@ export function SetupFlow() {
   }
 
   async function handleLogoChange(index: number, file: File | null) {
-    if (!file) {
+    try {
+      if (!file) {
+        setErrorMessage('');
+        setAccounts((currentAccounts) =>
+          currentAccounts.map((account, currentIndex) =>
+            currentIndex === index
+              ? { ...account, logoFile: null, preview: '', selectedPresetId: null }
+              : account
+          )
+        );
+        return;
+      }
+
+      assertSafeImageFile(file);
+      const preview = await readPreview(file);
+
+      setErrorMessage('');
       setAccounts((currentAccounts) =>
         currentAccounts.map((account, currentIndex) =>
           currentIndex === index
-            ? { ...account, logoFile: null, preview: '', selectedPresetId: null }
+            ? {
+                ...account,
+                name: account.nameSource === 'manual' ? account.name : '',
+                nameSource: 'manual',
+                logoFile: file,
+                preview,
+                selectedPresetId: null
+              }
             : account
         )
       );
-      return;
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to load that image.');
     }
-
-    const preview = await readPreview(file);
-
-    setAccounts((currentAccounts) =>
-      currentAccounts.map((account, currentIndex) =>
-        currentIndex === index
-          ? {
-              ...account,
-              name: account.nameSource === 'manual' ? account.name : '',
-              nameSource: 'manual',
-              logoFile: file,
-              preview,
-              selectedPresetId: null
-            }
-          : account
-      )
-    );
   }
 
   function handleAddAccount() {

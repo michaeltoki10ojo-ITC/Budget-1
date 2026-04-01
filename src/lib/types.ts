@@ -1,6 +1,11 @@
 export type AppSettings = {
-  pinHash: string;
   isSeeded: boolean;
+  securityVersion?: number;
+  pinSaltBase64?: string;
+  keyDerivationIterations?: number;
+  pinHash?: string;
+  failedUnlockAttempts?: number;
+  lockoutUntilISO?: string;
 };
 
 export type Account = {
@@ -63,4 +68,11 @@ export type AddWishlistInput = {
   priceCents: number;
   url: string;
   imageFile: File;
+};
+
+export type BudgetVault = {
+  accounts: Account[];
+  expenses: Expense[];
+  wishlistItems: WishlistItem[];
+  assets: AssetRecord[];
 };

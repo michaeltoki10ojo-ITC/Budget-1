@@ -15,7 +15,7 @@ vi.mock('../../app/state/BudgetAppContext', () => ({
 
 describe('LockScreen', () => {
   it('submits the pin after four digits', async () => {
-    unlock.mockResolvedValueOnce(false);
+    unlock.mockResolvedValueOnce({ ok: false, message: 'Incorrect PIN. Try again.' });
     const user = userEvent.setup();
 
     render(<LockScreen />);

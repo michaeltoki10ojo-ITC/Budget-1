@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useBudgetApp } from '../../app/state/BudgetAppContext';
 import styles from './LockScreen.module.css';
 
-const KEYPAD = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'];
+const KEYPAD = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'Del'];
 
 export function LockScreen() {
   const { unlock, resetApp } = useBudgetApp();
@@ -17,10 +17,10 @@ export function LockScreen() {
       }
 
       setIsSubmitting(true);
-      const unlocked = await unlock(pin);
+      const result = await unlock(pin);
 
-      if (!unlocked) {
-        setErrorMessage('Incorrect PIN. Try again.');
+      if (!result.ok) {
+        setErrorMessage(result.message ?? 'Incorrect PIN. Try again.');
         setPin('');
       }
 
@@ -69,7 +69,7 @@ export function LockScreen() {
                 onClick={() => {
                   setErrorMessage('');
 
-                  if (keyValue === '⌫') {
+                  if (keyValue === 'Del') {
                     setPin((currentPin) => currentPin.slice(0, -1));
                     return;
                   }

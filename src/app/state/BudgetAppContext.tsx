@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import type {
   Account,
   AddAccountInput,
@@ -6,24 +14,29 @@ import type {
   AddWishlistInput,
   AppSettings,
   AssetRecord,
+  BudgetVault,
   Expense,
   SetupAccountInput,
   WishlistItem
 } from '../../lib/types';
+import { clearAllLocalData, settingsRepo } from '../../lib/storage/repositories';
 import {
-  accountsRepo,
-  assetsRepo,
-  clearAllLocalData,
-  expensesRepo,
-  settingsRepo,
-  wishlistRepo
-} from '../../lib/storage/repositories';
+  initializeSecureVault,
+  isLegacySecuritySettings,
+  migrateLegacyPlaintextVault,
+  persistSecureVault,
+  unlockSecureVault
+} from '../../lib/storage/secureVault';
 import { resizeImageToDataUrl } from '../../lib/utils/image';
 import { createId } from '../../lib/utils/id';
-import { hashPin, verifyPin } from '../../lib/utils/pin';
 import { ensureFiveIncrement } from '../../lib/utils/money';
 
 type BootStatus = 'loading' | 'setup' | 'locked' | 'ready';
+
+type UnlockResult = {
+  ok: boolean;
+  message?: string;
+};
 
 type BudgetAppContextValue = {
   bootStatus: BootStatus;
@@ -34,7 +47,7 @@ type BudgetAppContextValue = {
   assets: Record<string, AssetRecord>;
   completeSetup: (pin: string, accountInputs: SetupAccountInput[]) => Promise<void>;
   addAccount: (input: AddAccountInput) => Promise<void>;
-  unlock: (pin: string) => Promise<boolean>;
+  unlock: (pin: string) => Promise<UnlockResult>;
   lock: () => void;
   quickAdjustBalance: (accountId: string, deltaCents: number) => Promise<void>;
   addExpense: (input: AddExpenseInput) => Promise<void>;
@@ -44,22 +57,77 @@ type BudgetAppContextValue = {
   resetApp: () => Promise<void>;
 };
 
+const LOCKOUT_START_ATTEMPT = 5;
+const LOCKOUT_BASE_MS = 30_000;
+const MAX_LOCKOUT_MS = 15 * 60_000;
+
 const BudgetAppContext = createContext<BudgetAppContextValue | undefined>(undefined);
 
-async function loadAllData() {
-  const [accounts, expenses, wishlistItems, assets] = await Promise.all([
-    accountsRepo.list(),
-    expensesRepo.listAll(),
-    wishlistRepo.list(),
-    assetsRepo.listAll()
-  ]);
+function sortAccounts(accounts: Account[]) {
+  return [...accounts].sort((left, right) => left.sortOrder - right.sortOrder);
+}
 
-  return {
-    accounts,
-    expenses,
-    wishlistItems,
-    assets: Object.fromEntries(assets.map((asset) => [asset.id, asset]))
-  };
+function sortExpenses(expenses: Expense[]) {
+  return [...expenses].sort((left, right) => {
+    if (left.dateISO !== right.dateISO) {
+      return right.dateISO.localeCompare(left.dateISO);
+    }
+
+    return right.createdAt.localeCompare(left.createdAt);
+  });
+}
+
+function sortWishlistItems(wishlistItems: WishlistItem[]) {
+  return [...wishlistItems].sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt)
+  );
+}
+
+function lockoutMessage(remainingMs: number): string {
+  const totalSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes > 0) {
+    return `Too many attempts. Try again in ${minutes}m ${seconds}s.`;
+  }
+
+  return `Too many attempts. Try again in ${seconds}s.`;
+}
+
+function normalizeSecuritySettings(settings: AppSettings | null): AppSettings | null {
+  if (!settings) {
+    return null;
+  }
+
+  const lockoutUntilMs = settings.lockoutUntilISO
+    ? new Date(settings.lockoutUntilISO).getTime()
+    : null;
+
+  if (lockoutUntilMs && lockoutUntilMs <= Date.now()) {
+    return {
+      ...settings,
+      failedUnlockAttempts: 0,
+      lockoutUntilISO: undefined
+    };
+  }
+
+  return settings;
+}
+
+function nextLockoutDurationMs(failedUnlockAttempts: number): number {
+  if (failedUnlockAttempts < LOCKOUT_START_ATTEMPT) {
+    return 0;
+  }
+
+  return Math.min(
+    MAX_LOCKOUT_MS,
+    LOCKOUT_BASE_MS * 2 ** (failedUnlockAttempts - LOCKOUT_START_ATTEMPT)
+  );
+}
+
+function toAssetMap(assets: AssetRecord[]) {
+  return Object.fromEntries(assets.map((asset) => [asset.id, asset]));
 }
 
 export function BudgetAppProvider({ children }: { children: React.ReactNode }) {
@@ -69,225 +137,353 @@ export function BudgetAppProvider({ children }: { children: React.ReactNode }) {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [wishlistItems, setWishlistItems] = useState<WishlistItem[]>([]);
   const [assets, setAssets] = useState<Record<string, AssetRecord>>({});
+  const sessionKeyRef = useRef<CryptoKey | null>(null);
 
-  async function saveAccountWithLogo(
-    input: Pick<AddAccountInput, 'name' | 'balanceCents' | 'logoFile'>,
-    sortOrder?: number
-  ) {
-    const resizedImage = await resizeImageToDataUrl(input.logoFile);
-    const savedAsset = await assetsRepo.save(resizedImage);
-    const account =
-      typeof sortOrder === 'number'
-        ? {
-            id: createId(),
-            name: input.name,
-            logoAssetId: savedAsset.id,
-            balanceCents: input.balanceCents,
-            sortOrder,
-            createdAt: new Date().toISOString()
-          }
-        : await accountsRepo.create({
-            name: input.name,
-            balanceCents: input.balanceCents,
-            logoAssetId: savedAsset.id
-          });
-
-    return { account, asset: savedAsset };
-  }
-
-  useEffect(() => {
-    async function bootstrap() {
-      const nextSettings = settingsRepo.get();
-
-      if (!nextSettings?.isSeeded || !nextSettings.pinHash) {
-        setSettings(null);
-        setAccounts([]);
-        setExpenses([]);
-        setWishlistItems([]);
-        setAssets({});
-        setBootStatus('setup');
-        return;
-      }
-
-      const data = await loadAllData();
-      setSettings(nextSettings);
-      setAccounts(data.accounts);
-      setExpenses(data.expenses);
-      setWishlistItems(data.wishlistItems);
-      setAssets(data.assets);
-      setBootStatus('locked');
-    }
-
-    void bootstrap();
+  const applyVaultToState = useCallback((vault: BudgetVault) => {
+    setAccounts(sortAccounts(vault.accounts));
+    setExpenses(sortExpenses(vault.expenses));
+    setWishlistItems(sortWishlistItems(vault.wishlistItems));
+    setAssets(toAssetMap(vault.assets));
   }, []);
 
+  const clearSensitiveState = useCallback(() => {
+    sessionKeyRef.current = null;
+    setAccounts([]);
+    setExpenses([]);
+    setWishlistItems([]);
+    setAssets({});
+  }, []);
+
+  const currentVault = useMemo<BudgetVault>(
+    () => ({
+      accounts,
+      expenses,
+      wishlistItems,
+      assets: Object.values(assets)
+    }),
+    [accounts, expenses, wishlistItems, assets]
+  );
+
+  const persistVaultState = useCallback(
+    async (vault: BudgetVault) => {
+      if (!sessionKeyRef.current) {
+        throw new Error('Unlock the app before editing your budget.');
+      }
+
+      await persistSecureVault(sessionKeyRef.current, vault);
+      applyVaultToState(vault);
+    },
+    [applyVaultToState]
+  );
+
+  const lock = useCallback(() => {
+    setBootStatus((currentStatus) => {
+      if (currentStatus === 'ready') {
+        clearSensitiveState();
+        return 'locked';
+      }
+
+      return currentStatus;
+    });
+  }, [clearSensitiveState]);
+
+  useEffect(() => {
+    const nextSettings = normalizeSecuritySettings(settingsRepo.get());
+
+    if (nextSettings) {
+      settingsRepo.save(nextSettings);
+    }
+
+    setSettings(nextSettings);
+
+    if (!nextSettings?.isSeeded) {
+      clearSensitiveState();
+      setBootStatus('setup');
+      return;
+    }
+
+    clearSensitiveState();
+    setBootStatus('locked');
+  }, [clearSensitiveState]);
+
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'hidden') {
+        lock();
+      }
+    }
+
+    function handlePageHide() {
+      lock();
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [lock]);
+
   async function completeSetup(pin: string, accountInputs: SetupAccountInput[]) {
-    const pinHash = await hashPin(pin);
     const seededAccounts: Account[] = [];
-    const nextAssets: Record<string, AssetRecord> = {};
+    const nextAssets: AssetRecord[] = [];
 
     for (let index = 0; index < accountInputs.length; index += 1) {
       const accountInput = accountInputs[index];
-      const { account, asset } = await saveAccountWithLogo(accountInput, index);
+      const resizedImage = await resizeImageToDataUrl(accountInput.logoFile);
+      const asset: AssetRecord = {
+        id: createId(),
+        createdAt: new Date().toISOString(),
+        dataUrl: resizedImage.dataUrl,
+        mimeType: resizedImage.mimeType,
+        width: resizedImage.width,
+        height: resizedImage.height
+      };
+      const account: Account = {
+        id: createId(),
+        name: accountInput.name,
+        logoAssetId: asset.id,
+        balanceCents: accountInput.balanceCents,
+        sortOrder: index,
+        createdAt: new Date().toISOString()
+      };
 
       seededAccounts.push(account);
-      nextAssets[asset.id] = asset;
+      nextAssets.push(asset);
     }
 
-    await accountsRepo.seedStarterAccounts(seededAccounts);
-
-    const nextSettings: AppSettings = {
-      pinHash,
-      isSeeded: true
-    };
+    const nextSettings = await initializeSecureVault(pin, {
+      accounts: seededAccounts,
+      expenses: [],
+      wishlistItems: [],
+      assets: nextAssets
+    });
 
     settingsRepo.save(nextSettings);
-
     setSettings(nextSettings);
-    setAccounts(seededAccounts);
-    setExpenses([]);
-    setWishlistItems([]);
-    setAssets(nextAssets);
+    clearSensitiveState();
     setBootStatus('locked');
   }
 
   async function addAccount(input: AddAccountInput) {
     ensureFiveIncrement(input.balanceCents);
-    const { account, asset } = await saveAccountWithLogo(input);
 
-    setAccounts((currentAccounts) => [...currentAccounts, account]);
-    setAssets((currentAssets) => ({
-      ...currentAssets,
-      [asset.id]: asset
-    }));
+    const resizedImage = await resizeImageToDataUrl(input.logoFile);
+    const asset: AssetRecord = {
+      id: createId(),
+      createdAt: new Date().toISOString(),
+      dataUrl: resizedImage.dataUrl,
+      mimeType: resizedImage.mimeType,
+      width: resizedImage.width,
+      height: resizedImage.height
+    };
+    const account: Account = {
+      id: createId(),
+      createdAt: new Date().toISOString(),
+      name: input.name,
+      logoAssetId: asset.id,
+      balanceCents: input.balanceCents,
+      sortOrder: currentVault.accounts.length
+    };
+
+    await persistVaultState({
+      ...currentVault,
+      accounts: [...currentVault.accounts, account],
+      assets: [...currentVault.assets, asset]
+    });
   }
 
-  async function unlock(pin: string): Promise<boolean> {
+  async function unlock(pin: string): Promise<UnlockResult> {
     if (!settings) {
-      return false;
+      return {
+        ok: false,
+        message: 'Set up the app before unlocking it.'
+      };
     }
 
-    const matches = await verifyPin(pin, settings.pinHash);
+    const normalizedSettings = normalizeSecuritySettings(settings) ?? settings;
 
-    if (!matches) {
-      return false;
+    if (normalizedSettings !== settings) {
+      settingsRepo.save(normalizedSettings);
+      setSettings(normalizedSettings);
     }
 
-    const data = await loadAllData();
-    setAccounts(data.accounts);
-    setExpenses(data.expenses);
-    setWishlistItems(data.wishlistItems);
-    setAssets(data.assets);
-    setBootStatus('ready');
-    return true;
-  }
+    const lockoutUntilMs = normalizedSettings.lockoutUntilISO
+      ? new Date(normalizedSettings.lockoutUntilISO).getTime()
+      : null;
 
-  function lock() {
-    if (settings?.isSeeded) {
-      setBootStatus('locked');
+    if (lockoutUntilMs && lockoutUntilMs > Date.now()) {
+      return {
+        ok: false,
+        message: lockoutMessage(lockoutUntilMs - Date.now())
+      };
     }
+
+    const unlockResult = isLegacySecuritySettings(normalizedSettings)
+      ? await migrateLegacyPlaintextVault(pin, normalizedSettings)
+      : await unlockSecureVault(pin, normalizedSettings);
+
+    if (unlockResult) {
+      sessionKeyRef.current = unlockResult.key;
+      applyVaultToState(unlockResult.vault);
+      const baseUnlockedSettings =
+        (unlockResult as { nextSettings?: AppSettings }).nextSettings ?? normalizedSettings;
+
+      const unlockedSettings: AppSettings = {
+        ...baseUnlockedSettings,
+        failedUnlockAttempts: 0,
+        lockoutUntilISO: undefined
+      };
+
+      settingsRepo.save(unlockedSettings);
+      setSettings(unlockedSettings);
+      setBootStatus('ready');
+
+      return { ok: true };
+    }
+
+    const failedUnlockAttempts = (normalizedSettings.failedUnlockAttempts ?? 0) + 1;
+    const lockoutDurationMs = nextLockoutDurationMs(failedUnlockAttempts);
+    const nextSettings: AppSettings = {
+      ...normalizedSettings,
+      failedUnlockAttempts,
+      lockoutUntilISO:
+        lockoutDurationMs > 0 ? new Date(Date.now() + lockoutDurationMs).toISOString() : undefined
+    };
+
+    settingsRepo.save(nextSettings);
+    setSettings(nextSettings);
+
+    return {
+      ok: false,
+      message:
+        lockoutDurationMs > 0
+          ? lockoutMessage(lockoutDurationMs)
+          : 'Incorrect PIN. Try again.'
+    };
   }
 
   async function quickAdjustBalance(accountId: string, deltaCents: number) {
     ensureFiveIncrement(deltaCents);
-    const updatedAccount = await accountsRepo.updateBalance(accountId, deltaCents);
 
-    setAccounts((currentAccounts) =>
-      currentAccounts.map((account) =>
-        account.id === updatedAccount.id ? updatedAccount : account
-      )
-    );
+    const nextAccounts = currentVault.accounts.map((account) => {
+      if (account.id !== accountId) {
+        return account;
+      }
+
+      const nextBalance = account.balanceCents + deltaCents;
+      ensureFiveIncrement(nextBalance);
+
+      return {
+        ...account,
+        balanceCents: nextBalance
+      };
+    });
+
+    await persistVaultState({
+      ...currentVault,
+      accounts: nextAccounts
+    });
   }
 
   async function addExpense(input: AddExpenseInput) {
     ensureFiveIncrement(input.amountCents);
-    const savedExpense = await expensesRepo.create(input);
-    const updatedAccount = await accountsRepo.updateBalance(input.accountId, -input.amountCents);
 
-    setExpenses((currentExpenses) =>
-      [savedExpense, ...currentExpenses].sort((left, right) => {
-        if (left.dateISO !== right.dateISO) {
-          return right.dateISO.localeCompare(left.dateISO);
-        }
+    const expense: Expense = {
+      id: createId(),
+      createdAt: new Date().toISOString(),
+      accountId: input.accountId,
+      name: input.name,
+      dateISO: input.dateISO,
+      amountCents: input.amountCents
+    };
+    const nextAccounts = currentVault.accounts.map((account) =>
+      account.id === input.accountId
+        ? {
+            ...account,
+            balanceCents: account.balanceCents - input.amountCents
+          }
+        : account
+    );
 
-        return right.createdAt.localeCompare(left.createdAt);
-      })
-    );
-    setAccounts((currentAccounts) =>
-      currentAccounts.map((account) =>
-        account.id === updatedAccount.id ? updatedAccount : account
-      )
-    );
+    await persistVaultState({
+      ...currentVault,
+      accounts: nextAccounts,
+      expenses: [expense, ...currentVault.expenses]
+    });
   }
 
   async function deleteExpense(expenseId: string) {
-    const expense = expenses.find((entry) => entry.id === expenseId);
+    const expense = currentVault.expenses.find((entry) => entry.id === expenseId);
 
     if (!expense) {
       return;
     }
 
-    await expensesRepo.delete(expenseId);
-    const updatedAccount = await accountsRepo.updateBalance(expense.accountId, expense.amountCents);
+    const nextAccounts = currentVault.accounts.map((account) =>
+      account.id === expense.accountId
+        ? {
+            ...account,
+            balanceCents: account.balanceCents + expense.amountCents
+          }
+        : account
+    );
 
-    setExpenses((currentExpenses) =>
-      currentExpenses.filter((entry) => entry.id !== expenseId)
-    );
-    setAccounts((currentAccounts) =>
-      currentAccounts.map((account) =>
-        account.id === updatedAccount.id ? updatedAccount : account
-      )
-    );
+    await persistVaultState({
+      ...currentVault,
+      accounts: nextAccounts,
+      expenses: currentVault.expenses.filter((entry) => entry.id !== expenseId)
+    });
   }
 
   async function addWishlistItem(input: AddWishlistInput) {
     const resizedImage = await resizeImageToDataUrl(input.imageFile);
-    const savedAsset = await assetsRepo.save(resizedImage);
-    const wishlistItem = await wishlistRepo.create({
+    const asset: AssetRecord = {
+      id: createId(),
+      createdAt: new Date().toISOString(),
+      dataUrl: resizedImage.dataUrl,
+      mimeType: resizedImage.mimeType,
+      width: resizedImage.width,
+      height: resizedImage.height
+    };
+    const wishlistItem: WishlistItem = {
+      id: createId(),
+      createdAt: new Date().toISOString(),
+      imageAssetId: asset.id,
       name: input.name,
       priceCents: input.priceCents,
-      url: input.url,
-      imageAssetId: savedAsset.id
-    });
+      url: input.url
+    };
 
-    setAssets((currentAssets) => ({
-      ...currentAssets,
-      [savedAsset.id]: savedAsset
-    }));
-    setWishlistItems((currentWishlistItems) =>
-      [wishlistItem, ...currentWishlistItems].sort((left, right) =>
-        right.createdAt.localeCompare(left.createdAt)
-      )
-    );
+    await persistVaultState({
+      ...currentVault,
+      wishlistItems: [wishlistItem, ...currentVault.wishlistItems],
+      assets: [...currentVault.assets, asset]
+    });
   }
 
   async function deleteWishlistItem(wishlistItemId: string) {
-    const wishlistItem = wishlistItems.find((entry) => entry.id === wishlistItemId);
+    const wishlistItem = currentVault.wishlistItems.find((entry) => entry.id === wishlistItemId);
 
     if (!wishlistItem) {
       return;
     }
 
-    await wishlistRepo.delete(wishlistItemId);
-    await assetsRepo.delete(wishlistItem.imageAssetId);
-
-    setWishlistItems((currentWishlistItems) =>
-      currentWishlistItems.filter((entry) => entry.id !== wishlistItemId)
-    );
-    setAssets((currentAssets) => {
-      const nextAssets = { ...currentAssets };
-      delete nextAssets[wishlistItem.imageAssetId];
-      return nextAssets;
+    await persistVaultState({
+      ...currentVault,
+      wishlistItems: currentVault.wishlistItems.filter(
+        (entry) => entry.id !== wishlistItemId
+      ),
+      assets: currentVault.assets.filter((asset) => asset.id !== wishlistItem.imageAssetId)
     });
   }
 
   async function resetApp() {
     await clearAllLocalData();
     setSettings(null);
-    setAccounts([]);
-    setExpenses([]);
-    setWishlistItems([]);
-    setAssets({});
+    clearSensitiveState();
     setBootStatus('setup');
     window.location.hash = '#/';
   }

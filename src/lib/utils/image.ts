@@ -5,6 +5,23 @@ export type ResizedImage = {
   height: number;
 };
 
+const MAX_IMAGE_UPLOAD_BYTES = 5 * 1024 * 1024;
+const BLOCKED_MIME_TYPES = new Set(['image/svg+xml']);
+
+export function assertSafeImageFile(file: File): void {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Upload an image file.');
+  }
+
+  if (BLOCKED_MIME_TYPES.has(file.type)) {
+    throw new Error('SVG uploads are not supported.');
+  }
+
+  if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+    throw new Error('Images must be 5 MB or smaller.');
+  }
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -27,6 +44,7 @@ export async function resizeImageToDataUrl(
   file: File,
   maxDimension = 512
 ): Promise<ResizedImage> {
+  assertSafeImageFile(file);
   const originalDataUrl = await readFileAsDataUrl(file);
   const image = await loadImage(originalDataUrl);
   const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));

@@ -32,10 +32,19 @@ interface BudgetDbSchema extends DBSchema {
     key: string;
     value: AssetRecord;
   };
+  secureVault: {
+    key: string;
+    value: {
+      id: string;
+      cipherTextBase64: string;
+      ivBase64: string;
+      updatedAt: string;
+    };
+  };
 }
 
 const DB_NAME = 'budget-pwa-v1';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<import('idb').IDBPDatabase<BudgetDbSchema>> | null = null;
 
@@ -72,6 +81,10 @@ export function getBudgetDb() {
 
       if (!db.objectStoreNames.contains('assets')) {
         db.createObjectStore('assets', { keyPath: 'id' });
+      }
+
+      if (!db.objectStoreNames.contains('secureVault')) {
+        db.createObjectStore('secureVault', { keyPath: 'id' });
       }
     }
   });

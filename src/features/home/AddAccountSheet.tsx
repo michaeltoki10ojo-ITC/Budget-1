@@ -10,6 +10,7 @@ import {
   presetLogoToFile,
   type PresetLogoOption
 } from '../setup/logoOptions';
+import { assertSafeImageFile } from '../../lib/utils/image';
 import styles from './AddAccountSheet.module.css';
 
 type AddAccountSheetProps = {
@@ -63,6 +64,7 @@ export function AddAccountSheet({
 
   async function handlePresetSelect(preset: PresetLogoOption) {
     const logoFile = await presetLogoToFile(preset);
+    setErrorMessage('');
     setName(preset.label);
     setNameMode('preset');
 
@@ -74,19 +76,27 @@ export function AddAccountSheet({
   }
 
   async function handleLogoChange(file: File | null) {
-    if (!file) {
-      setLogoState(defaultPreviewState());
-      return;
-    }
+    try {
+      if (!file) {
+        setErrorMessage('');
+        setLogoState(defaultPreviewState());
+        return;
+      }
 
-    const preview = await readPreview(file);
-    setName((currentName) => (nameMode === 'preset' ? '' : currentName));
-    setNameMode('manual');
-    setLogoState({
-      logoFile: file,
-      preview,
-      selectedPresetId: null
-    });
+      assertSafeImageFile(file);
+      const preview = await readPreview(file);
+      setErrorMessage('');
+      setName((currentName) => (nameMode === 'preset' ? '' : currentName));
+      setNameMode('manual');
+      setLogoState({
+        logoFile: file,
+        preview,
+        selectedPresetId: null
+      });
+    } catch (error) {
+      setLogoState(defaultPreviewState());
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to load that image.');
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

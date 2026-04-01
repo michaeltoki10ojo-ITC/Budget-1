@@ -31,6 +31,10 @@ function AppContent() {
     return <SetupFlow />;
   }
 
+  if (bootStatus === 'locked') {
+    return <LockScreen />;
+  }
+
   return (
     <div className={styles.frame}>
       <LayoutGroup id="budget-layout">
@@ -44,7 +48,6 @@ function AppContent() {
           </Route>
         </Routes>
       </LayoutGroup>
-      {bootStatus === 'locked' ? <LockScreen /> : null}
     </div>
   );
 }

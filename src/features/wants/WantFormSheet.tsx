@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { AddWishlistInput } from '../../lib/types';
 import { parseCurrencyInputToCents } from '../../lib/utils/money';
+import { assertSafeImageFile } from '../../lib/utils/image';
 import styles from './WantFormSheet.module.css';
 
 type WishlistFormSheetProps = {
@@ -43,14 +44,23 @@ export function WishlistFormSheet({
   }
 
   async function handleFileChange(file: File | null) {
-    setImageFile(file);
+    try {
+      setImageFile(file);
 
-    if (!file) {
+      if (!file) {
+        setErrorMessage('');
+        setPreview('');
+        return;
+      }
+
+      assertSafeImageFile(file);
+      setErrorMessage('');
+      setPreview(await readPreview(file));
+    } catch (error) {
+      setImageFile(null);
       setPreview('');
-      return;
+      setErrorMessage(error instanceof Error ? error.message : 'Unable to load that image.');
     }
-
-    setPreview(await readPreview(file));
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
