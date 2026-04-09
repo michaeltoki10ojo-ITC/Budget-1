@@ -38,6 +38,13 @@ VITE_SUPABASE_ANON_KEY=your_anon_key
 - `npm test`
 - `npm run build`
 
+## GitHub Pages Setup
+
+Add these GitHub repository secrets before deploying from `main`:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
 ## Notes
 
 - The previous local-only app is archived in [`V1`](./V1).
